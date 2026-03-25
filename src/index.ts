@@ -10,11 +10,11 @@ import {
   MessageFlags,
 } from "discord.js";
 
-import * as db                               from "./database";
-import { generateDniImage }                  from "./generateDni";
-import { getRobloxData, searchRobloxUsers }  from "./roblox";
+import * as db                              from "./database";
+import { generateDniImage }                 from "./generateDni";
+import { getRobloxData, searchRobloxUsers } from "./roblox";
 
-// ── Keep-alive HTTP para Railway / UptimeRobot ────────────────────────────────
+// ── Keep-alive HTTP para Railway ──────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT ?? "3000");
 http.createServer((_req, res) => {
   res.writeHead(200, { "Content-Type": "text/plain" });
@@ -27,18 +27,18 @@ function formatDocumento(num: number): string {
 }
 
 // ── Constantes de canales ─────────────────────────────────────────────────────
-const GUILD_ID          = process.env.GUILD_ID          ?? "1349870169056350270";
-const CANAL_CREAR_DNI   = process.env.CANAL_CREAR_DNI   ?? "1472380283348062341";
-const CANAL_VER_DNI     = process.env.CANAL_VER_DNI     ?? "1349870171564539968";
-const CANAL_COMPROBAR   = process.env.CANAL_COMPROBAR   ?? "1472380033086652509";
-const CANAL_LOGS_DNI    = process.env.CANAL_LOGS_DNI    ?? "1472380236246159601";
+const GUILD_ID        = process.env.GUILD_ID        ?? "1349870169056350270";
+const CANAL_CREAR_DNI = process.env.CANAL_CREAR_DNI ?? "1472380283348062341";
+const CANAL_VER_DNI   = process.env.CANAL_VER_DNI   ?? "1349870171564539968";
+const CANAL_COMPROBAR = process.env.CANAL_COMPROBAR ?? "1472380033086652509";
+const CANAL_LOGS_DNI  = process.env.CANAL_LOGS_DNI  ?? "1472380236246159601";
 
 // ── Constantes de roles ───────────────────────────────────────────────────────
 const ROL_MODERADOR = process.env.ROL_MODERADOR ?? "1349870169756930109";
 const ROL_TERCER_PJ = process.env.ROL_TERCER_PJ ?? "1349870169111003338";
 
 // ── Map de sesiones pendientes ────────────────────────────────────────────────
-const pendingDnis = new Map<string, { numeroPj: number; robloxName: string; avatarUrl: string }>();
+const pendingDnis = new Map<string, { numeroPj: number; robloxName: string }>();
 
 // ── Slash commands ────────────────────────────────────────────────────────────
 const commands = [
@@ -133,20 +133,13 @@ if (!DISCORD_TOKEN) {
 }
 
 // ── Ready ─────────────────────────────────────────────────────────────────────
-// Usamos clientReady en lugar de ready (sin deprecated warning)
 client.once("clientReady", async (readyClient) => {
   console.log(`✅ Bot conectado como ${readyClient.user.tag}`);
 
-  const statuses = [
-    { name: "/ayuda-dni", type: ActivityType.Playing },
-  ];
-  let si = 0;
-  const tick = () => {
-    const s = statuses[si++ % statuses.length];
-    readyClient.user.setPresence({ activities: [{ name: s.name, type: s.type }], status: "online" });
-  };
-  tick();
-  setInterval(tick, 15_000);
+  readyClient.user.setPresence({
+    activities: [{ name: "/ayuda-dni", type: ActivityType.Playing }],
+    status: "online",
+  });
 
   try {
     const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN!);
@@ -160,7 +153,7 @@ client.once("clientReady", async (readyClient) => {
 // ── Interactions ──────────────────────────────────────────────────────────────
 client.on("interactionCreate", async (interaction) => {
 
-  // ── Autocomplete ────────────────────────────────────────────────────────
+  // ── Autocomplete ──────────────────────────────────────────────────────────
   if (interaction.isAutocomplete()) {
     const focused = interaction.options.getFocused(true);
     if (focused.name !== "usuario_roblox") { await interaction.respond([]); return; }
@@ -173,7 +166,7 @@ client.on("interactionCreate", async (interaction) => {
     return;
   }
 
-  // ── Modal Submit ─────────────────────────────────────────────────────────
+  // ── Modal Submit ──────────────────────────────────────────────────────────
   if (interaction.isModalSubmit() && interaction.customId.startsWith("dni_modal_")) {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const numeroPj = parseInt(interaction.customId.split("_")[2]);
@@ -198,10 +191,14 @@ client.on("interactionCreate", async (interaction) => {
       db.createDni({
         discordUserId: interaction.user.id, numeroPj, nombre, apellido, nacionalidad,
         sexo, fechaNacimiento: fechaNac, fechaEmision, documento,
-        robloxUsername: pending.robloxName, avatarUrl: pending.avatarUrl,
+        robloxUsername: pending.robloxName, avatarUrl: "",
       });
 
-      const imgBuffer = await generateDniImage(apellido, nombre, nacionalidad, sexo, fechaNac, fechaEmision, documento, pending.avatarUrl);
+      // Generar imagen con avatar fresco (usa robloxUsername)
+      const imgBuffer = await generateDniImage(
+        apellido, nombre, nacionalidad, sexo, fechaNac, fechaEmision,
+        documento, pending.robloxName,
+      );
 
       const logsChannel = await client.channels.fetch(CANAL_LOGS_DNI).catch(() => null);
       if (logsChannel?.isTextBased()) {
@@ -217,14 +214,16 @@ client.on("interactionCreate", async (interaction) => {
         await logsChannel.send({ embeds: [logEmbed], files: [new AttachmentBuilder(imgBuffer, { name: "dni.png" })] });
       }
 
-      return interaction.editReply({ content: `<a:Aprobado:1399874076402778122> | Tu DNI ha sido registrado exitosamente. Podés visualizarlo en https://discord.com/channels/${GUILD_ID}/${CANAL_VER_DNI}.` });
+      return interaction.editReply({
+        content: `<a:Aprobado:1399874076402778122> | Tu DNI ha sido registrado exitosamente. Podés visualizarlo en https://discord.com/channels/${GUILD_ID}/${CANAL_VER_DNI}.`,
+      });
     } catch (error: any) {
       console.error("Error creando DNI:", error);
       return interaction.editReply({ content: `<a:Reprobado:1399874121055076372> | Error al crear el DNI: \`${error?.message ?? String(error)}\`` });
     }
   }
 
-  // ── Select Menus ─────────────────────────────────────────────────────────
+  // ── Select Menus ──────────────────────────────────────────────────────────
   if (interaction.isStringSelectMenu() && interaction.customId === "seleccionar_dni_eliminar") {
     await interaction.deferUpdate();
     try {
@@ -239,7 +238,7 @@ client.on("interactionCreate", async (interaction) => {
     }
   }
 
-  // ── Buttons ──────────────────────────────────────────────────────────────
+  // ── Buttons ───────────────────────────────────────────────────────────────
   if (interaction.isButton()) {
     if (interaction.customId === "eliminar_todos_dnis") {
       await interaction.deferUpdate();
@@ -296,20 +295,18 @@ client.on("interactionCreate", async (interaction) => {
     const embed = new EmbedBuilder()
       .setColor(0x5865f2)
       .setTitle("<:config:1473970137089445909> | Comandos — Bot DNI Argentina RP")
-      .addFields(
-        {
-          name: "📄 Sistema de DNI",
-          value: [
-            `\`/crear-dni\` — Crea tu DNI en https://discord.com/channels/${GUILD_ID}/${CANAL_CREAR_DNI}`,
-            `\`/crear-3pj\` — Crea el DNI de tu 3er personaje *(requiere acceso especial)*`,
-            `\`/ver-dni\` — Visualizá tu DNI en https://discord.com/channels/${GUILD_ID}/${CANAL_VER_DNI}`,
-            `\`/comprobar-dni\` — Comprobá el DNI de otro usuario en https://discord.com/channels/${GUILD_ID}/${CANAL_COMPROBAR}`,
-            `\`/eliminar-pj\` — Elimina el personaje de un usuario *(Solo Administradores)*`,
-            `\`/todos-los-dni\` — Gestioná todos los DNIs registrados *(Solo Moderadores)*`,
-          ].join("\n"),
-          inline: false,
-        },
-      )
+      .addFields({
+        name: "📄 Sistema de DNI",
+        value: [
+          `\`/crear-dni\` — Crea tu DNI en https://discord.com/channels/${GUILD_ID}/${CANAL_CREAR_DNI}`,
+          `\`/crear-3pj\` — Crea el DNI de tu 3er personaje *(requiere acceso especial)*`,
+          `\`/ver-dni\` — Visualizá tu DNI en https://discord.com/channels/${GUILD_ID}/${CANAL_VER_DNI}`,
+          `\`/comprobar-dni\` — Comprobá el DNI de otro usuario en https://discord.com/channels/${GUILD_ID}/${CANAL_COMPROBAR}`,
+          `\`/eliminar-pj\` — Elimina el personaje de un usuario *(Solo Administradores)*`,
+          `\`/todos-los-dni\` — Gestioná todos los DNIs registrados *(Solo Moderadores)*`,
+        ].join("\n"),
+        inline: false,
+      })
       .setFooter({ text: "© 2026 Argentina RP┊ER:LC | Dev: @vladimirfernan.", iconURL: interaction.user.displayAvatarURL() })
       .setTimestamp();
     return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
@@ -317,17 +314,28 @@ client.on("interactionCreate", async (interaction) => {
 
   // /crear-dni
   if (interaction.commandName === "crear-dni") {
-    if (interaction.channelId !== CANAL_CREAR_DNI) return interaction.reply({ content: `<:adv:1468761911821602947> | Este comando se usa en <#${CANAL_CREAR_DNI}>`, flags: MessageFlags.Ephemeral });
+    if (interaction.channelId !== CANAL_CREAR_DNI)
+      return interaction.reply({ content: `<:adv:1468761911821602947> | Este comando se usa en <#${CANAL_CREAR_DNI}>`, flags: MessageFlags.Ephemeral });
+
     const numeroPj       = interaction.options.getInteger("numero_pj", true);
     const robloxUsername = interaction.options.getString("usuario_roblox", true);
     const totalSlots     = db.countDnisByDiscordId(interaction.user.id);
-    if (totalSlots >= 2) return interaction.reply({ content: "<a:Reprobado:1399874121055076372> | Ya tenés 2 DNIs registrados. Contactá a un administrador si necesitás eliminar uno.", flags: MessageFlags.Ephemeral });
+
+    if (totalSlots >= 2)
+      return interaction.reply({ content: "<a:Reprobado:1399874121055076372> | Ya tenés 2 DNIs registrados. Contactá a un administrador si necesitás eliminar uno.", flags: MessageFlags.Ephemeral });
+
     const slotExistente = db.getDniByDiscordIdAndSlot(interaction.user.id, numeroPj);
-    if (slotExistente) return interaction.reply({ content: `<a:cargando:1456888296381874207> | Tu **Personaje ${numeroPj}** ya tiene un DNI. Usá \`/ver-dni\` para verlo.`, flags: MessageFlags.Ephemeral });
+    if (slotExistente)
+      return interaction.reply({ content: `<a:cargando:1456888296381874207> | Tu **Personaje ${numeroPj}** ya tiene un DNI. Usá \`/ver-dni\` para verlo.`, flags: MessageFlags.Ephemeral });
+
     const roblox = await getRobloxData(robloxUsername);
-    if (!roblox) return interaction.reply({ content: `<:equiz:1468761969518706708> | No se encontró el usuario de Roblox: **${robloxUsername}**.`, flags: MessageFlags.Ephemeral });
-    pendingDnis.set(interaction.user.id, { numeroPj, robloxName: roblox.name, avatarUrl: roblox.avatarUrl });
+    if (!roblox)
+      return interaction.reply({ content: `<:equiz:1468761969518706708> | No se encontró el usuario de Roblox: **${robloxUsername}**.`, flags: MessageFlags.Ephemeral });
+
+    // Solo guardamos el nombre de Roblox, no la URL (se obtiene fresca al generar)
+    pendingDnis.set(interaction.user.id, { numeroPj, robloxName: roblox.name });
     setTimeout(() => pendingDnis.delete(interaction.user.id), 10 * 60 * 1000);
+
     const modal = new ModalBuilder().setCustomId(`dni_modal_${numeroPj}`).setTitle(`DNI — Personaje ${numeroPj}`);
     modal.addComponents(
       new ActionRowBuilder<TextInputBuilder>().addComponents(new TextInputBuilder().setCustomId("apellido").setLabel("Apellido").setStyle(TextInputStyle.Short).setPlaceholder("Ej: García").setRequired(true).setMaxLength(40)),
@@ -342,17 +350,22 @@ client.on("interactionCreate", async (interaction) => {
   // /crear-3pj
   if (interaction.commandName === "crear-3pj") {
     const member = interaction.member;
-    if (!member || !("roles" in member) || !(member.roles as any).cache.has(ROL_TERCER_PJ)) {
+    if (!member || !("roles" in member) || !(member.roles as any).cache.has(ROL_TERCER_PJ))
       return interaction.reply({ content: "<:equiz:1468761969518706708> | No tenés acceso a crear un 3er personaje.", flags: MessageFlags.Ephemeral });
-    }
+
     const robloxUsername = interaction.options.getString("usuario_roblox", true);
     const numeroPj       = 3;
     const slotExistente  = db.getDniByDiscordIdAndSlot(interaction.user.id, numeroPj);
-    if (slotExistente) return interaction.reply({ content: "<a:fijado:1468193352439824384> | Tu **Personaje 3** ya tiene un DNI. Usá `/ver-dni` para verlo.", flags: MessageFlags.Ephemeral });
+    if (slotExistente)
+      return interaction.reply({ content: "<a:fijado:1468193352439824384> | Tu **Personaje 3** ya tiene un DNI. Usá `/ver-dni` para verlo.", flags: MessageFlags.Ephemeral });
+
     const roblox = await getRobloxData(robloxUsername);
-    if (!roblox) return interaction.reply({ content: `<a:Nerd:1357113815623536791> | No se encontró el usuario de Roblox: **${robloxUsername}**.`, flags: MessageFlags.Ephemeral });
-    pendingDnis.set(interaction.user.id, { numeroPj, robloxName: roblox.name, avatarUrl: roblox.avatarUrl });
+    if (!roblox)
+      return interaction.reply({ content: `<a:Nerd:1357113815623536791> | No se encontró el usuario de Roblox: **${robloxUsername}**.`, flags: MessageFlags.Ephemeral });
+
+    pendingDnis.set(interaction.user.id, { numeroPj, robloxName: roblox.name });
     setTimeout(() => pendingDnis.delete(interaction.user.id), 10 * 60 * 1000);
+
     const modal = new ModalBuilder().setCustomId(`dni_modal_3`).setTitle(`DNI — Personaje 3`);
     modal.addComponents(
       new ActionRowBuilder<TextInputBuilder>().addComponents(new TextInputBuilder().setCustomId("apellido").setLabel("Apellido").setStyle(TextInputStyle.Short).setPlaceholder("Ej: García").setRequired(true).setMaxLength(40)),
@@ -366,15 +379,25 @@ client.on("interactionCreate", async (interaction) => {
 
   // /ver-dni
   if (interaction.commandName === "ver-dni") {
-    if (interaction.channelId !== CANAL_VER_DNI) return interaction.reply({ content: `<a:Nerd:1357113815623536791> | Este comando se usa en <#${CANAL_VER_DNI}>`, flags: MessageFlags.Ephemeral });
+    if (interaction.channelId !== CANAL_VER_DNI)
+      return interaction.reply({ content: `<a:Nerd:1357113815623536791> | Este comando se usa en <#${CANAL_VER_DNI}>`, flags: MessageFlags.Ephemeral });
+
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const numeroPj = interaction.options.getInteger("personaje", true);
+
     try {
       const dni = db.getDniByDiscordIdAndSlot(interaction.user.id, numeroPj);
-      if (!dni) return interaction.editReply({ content: `<:adv:1468761911821602947> | No tenés un DNI en el **Personaje ${numeroPj}**. Usá \`/crear-dni\` para generarlo.` });
+      if (!dni)
+        return interaction.editReply({ content: `<:adv:1468761911821602947> | No tenés un DNI en el **Personaje ${numeroPj}**. Usá \`/crear-dni\` para generarlo.` });
+
       const roblox     = await getRobloxData(dni.robloxUsername);
       const profileUrl = roblox ? `https://www.roblox.com/users/${roblox.id}/profile` : "#";
-      const imgBuffer  = await generateDniImage(dni.apellido, dni.nombre, dni.nacionalidad, dni.sexo, dni.fechaNacimiento, dni.fechaEmision, dni.documento, dni.avatarUrl);
+
+      // Avatar siempre fresco usando el robloxUsername guardado
+      const imgBuffer  = await generateDniImage(
+        dni.apellido, dni.nombre, dni.nacionalidad, dni.sexo,
+        dni.fechaNacimiento, dni.fechaEmision, dni.documento, dni.robloxUsername,
+      );
       const attachment = new AttachmentBuilder(imgBuffer, { name: "dni.png" });
       const embed      = new EmbedBuilder().setColor(0x0099ff)
         .setTitle("<a:check1:1468762093741412553> | Documento Nacional de Identidad")
@@ -390,16 +413,26 @@ client.on("interactionCreate", async (interaction) => {
 
   // /comprobar-dni
   if (interaction.commandName === "comprobar-dni") {
-    if (interaction.channelId !== CANAL_COMPROBAR) return interaction.reply({ content: `<a:Nerd:1357113815623536791> | Este comando se usa en <#${CANAL_COMPROBAR}>`, flags: MessageFlags.Ephemeral });
+    if (interaction.channelId !== CANAL_COMPROBAR)
+      return interaction.reply({ content: `<a:Nerd:1357113815623536791> | Este comando se usa en <#${CANAL_COMPROBAR}>`, flags: MessageFlags.Ephemeral });
+
     await interaction.deferReply();
     const numeroPj   = interaction.options.getInteger("personaje", true);
     const targetUser = interaction.options.getUser("usuario", true);
+
     try {
       const dni = db.getDniByDiscordIdAndSlot(targetUser.id, numeroPj);
-      if (!dni) return interaction.editReply({ content: `<:equiz:1468761969518706708> | **${targetUser.username}** no tiene DNI en el **Personaje ${numeroPj}**.` });
+      if (!dni)
+        return interaction.editReply({ content: `<:equiz:1468761969518706708> | **${targetUser.username}** no tiene DNI en el **Personaje ${numeroPj}**.` });
+
       const roblox     = await getRobloxData(dni.robloxUsername);
       const profileUrl = roblox ? `https://www.roblox.com/users/${roblox.id}/profile` : "#";
-      const imgBuffer  = await generateDniImage(dni.apellido, dni.nombre, dni.nacionalidad, dni.sexo, dni.fechaNacimiento, dni.fechaEmision, dni.documento, dni.avatarUrl);
+
+      // Avatar siempre fresco usando el robloxUsername guardado
+      const imgBuffer  = await generateDniImage(
+        dni.apellido, dni.nombre, dni.nacionalidad, dni.sexo,
+        dni.fechaNacimiento, dni.fechaEmision, dni.documento, dni.robloxUsername,
+      );
       const attachment = new AttachmentBuilder(imgBuffer, { name: "dni.png" });
       const embed      = new EmbedBuilder().setColor(0x0099ff)
         .setTitle("<a:check1:1468762093741412553> | Documento Nacional de Identidad")
@@ -417,17 +450,23 @@ client.on("interactionCreate", async (interaction) => {
   if (interaction.commandName === "eliminar-pj") {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const member = interaction.member;
-    if (!member || !("permissions" in member) || !(member.permissions as any).has(PermissionFlagsBits.Administrator)) {
+    if (!member || !("permissions" in member) || !(member.permissions as any).has(PermissionFlagsBits.Administrator))
       return interaction.editReply({ content: "<a:Nerd:1357113815623536791> | No tenés permisos de Administrador." });
-    }
+
     const targetUser = interaction.options.getUser("usuario", true);
     const numeroPj   = interaction.options.getInteger("numero_pj", true);
     const motivo     = interaction.options.getString("motivo", true);
+
     try {
       const dni = db.getDniByDiscordIdAndSlot(targetUser.id, numeroPj);
       if (!dni) return interaction.editReply({ content: `**${targetUser.username}** no tiene DNI en el **Personaje ${numeroPj}**.` });
-      const imgBuffer = await generateDniImage(dni.apellido, dni.nombre, dni.nacionalidad, dni.sexo, dni.fechaNacimiento, dni.fechaEmision, dni.documento, dni.avatarUrl);
+
+      const imgBuffer = await generateDniImage(
+        dni.apellido, dni.nombre, dni.nacionalidad, dni.sexo,
+        dni.fechaNacimiento, dni.fechaEmision, dni.documento, dni.robloxUsername,
+      );
       db.deleteDniByDiscordIdAndSlot(targetUser.id, numeroPj);
+
       const logsChannel = await client.channels.fetch(CANAL_LOGS_DNI).catch(() => null);
       if (logsChannel?.isTextBased()) {
         const logEmbed = new EmbedBuilder().setColor(0xff6600)
@@ -443,25 +482,32 @@ client.on("interactionCreate", async (interaction) => {
           .setFooter({ text: "Argentina Roleplay — Sistema de DNI" });
         await logsChannel.send({ embeds: [logEmbed], files: [new AttachmentBuilder(imgBuffer, { name: "dni_eliminado.png" })] });
       }
-      await interaction.editReply({ embeds: [new EmbedBuilder().setColor(0x00c851)
-        .setTitle("<a:Aprobado:1399874076402778122> | Personaje eliminado con éxito")
-        .addFields(
-          { name: "<:Miembro:1473969750139994112> | Usuario",           value: `${targetUser} (${targetUser.username})`, inline: false },
-          { name: "<a:Nerd:1357113815623536791> | Personaje",           value: `Personaje ${numeroPj}`,                  inline: true  },
-          { name: "<a:check1:1468762093741412553> | Nombre del PJ",     value: `${dni.nombre} ${dni.apellido}`,          inline: true  },
-          { name: "<:chik:1473970031489454100> | Documento",            value: `N° ${formatDocumento(dni.documento)}`,   inline: true  },
-          { name: "<:Ehh:1457908929504870475> | Motivo",                value: motivo,                                   inline: false },
-          { name: "<:Moderadores:1473981745689923728> | Ejecutado por", value: `${interaction.user}`,                    inline: true  },
-        ).setFooter({ text: "Argentina Roleplay — Sistema de DNI", iconURL: interaction.user.displayAvatarURL() }).setTimestamp()] });
-      try {
-        await targetUser.send({ embeds: [new EmbedBuilder().setColor(0xff6600)
-          .setTitle("Tu personaje fue eliminado")
-          .setDescription(`Un administrador eliminó tu **Personaje ${numeroPj}** en **Argentina Roleplay**.`)
+
+      await interaction.editReply({
+        embeds: [new EmbedBuilder().setColor(0x00c851)
+          .setTitle("<a:Aprobado:1399874076402778122> | Personaje eliminado con éxito")
           .addFields(
-            { name: "Personaje", value: `${dni.nombre} ${dni.apellido}`, inline: true },
-            { name: "Motivo",    value: motivo,                          inline: false },
-          ).setFooter({ text: "Si creés que es un error, contactá al staff." }).setTimestamp()] });
+            { name: "<:Miembro:1473969750139994112> | Usuario",           value: `${targetUser} (${targetUser.username})`, inline: false },
+            { name: "<a:Nerd:1357113815623536791> | Personaje",           value: `Personaje ${numeroPj}`,                  inline: true  },
+            { name: "<a:check1:1468762093741412553> | Nombre del PJ",     value: `${dni.nombre} ${dni.apellido}`,          inline: true  },
+            { name: "<:chik:1473970031489454100> | Documento",            value: `N° ${formatDocumento(dni.documento)}`,   inline: true  },
+            { name: "<:Ehh:1457908929504870475> | Motivo",                value: motivo,                                   inline: false },
+            { name: "<:Moderadores:1473981745689923728> | Ejecutado por", value: `${interaction.user}`,                    inline: true  },
+          ).setFooter({ text: "Argentina Roleplay — Sistema de DNI", iconURL: interaction.user.displayAvatarURL() }).setTimestamp()],
+      });
+
+      try {
+        await targetUser.send({
+          embeds: [new EmbedBuilder().setColor(0xff6600)
+            .setTitle("Tu personaje fue eliminado")
+            .setDescription(`Un administrador eliminó tu **Personaje ${numeroPj}** en **Argentina Roleplay**.`)
+            .addFields(
+              { name: "Personaje", value: `${dni.nombre} ${dni.apellido}`, inline: true },
+              { name: "Motivo",    value: motivo,                          inline: false },
+            ).setFooter({ text: "Si creés que es un error, contactá al staff." }).setTimestamp()],
+        });
       } catch { console.log(`No se pudo enviar DM a ${targetUser.username}.`); }
+
     } catch (error: any) {
       return interaction.editReply({ content: `Error: \`${error?.message ?? String(error)}\`` });
     }
@@ -470,15 +516,17 @@ client.on("interactionCreate", async (interaction) => {
   // /todos-los-dni
   if (interaction.commandName === "todos-los-dni") {
     const member = interaction.member;
-    if (!member || !("roles" in member) || !(member.roles as any).cache.has(ROL_MODERADOR)) {
+    if (!member || !("roles" in member) || !(member.roles as any).cache.has(ROL_MODERADOR))
       return interaction.reply({ content: "<a:Nerd:1357113815623536791> | No tenés los permisos necesarios.", flags: MessageFlags.Ephemeral });
-    }
+
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     try {
       const allDnis = db.getAllDnis();
       if (allDnis.length === 0) return interaction.editReply({ content: "No hay DNIs registrados en el sistema." });
-      const dniList = allDnis.map((d, i) => `**${i + 1}.** DNI N° ${formatDocumento(d.documento)} | ${d.nombre} ${d.apellido} | <@${d.discordUserId}> (PJ ${d.numeroPj})`).join("\n");
-      const embed   = new EmbedBuilder().setColor(0x0099ff)
+      const dniList = allDnis.map((d, i) =>
+        `**${i + 1}.** DNI N° ${formatDocumento(d.documento)} | ${d.nombre} ${d.apellido} | <@${d.discordUserId}> (PJ ${d.numeroPj})`
+      ).join("\n");
+      const embed = new EmbedBuilder().setColor(0x0099ff)
         .setTitle("<a:Aprobado:1399874076402778122> | Todos los DNIs Registrados")
         .setDescription(dniList.length > 4000 ? dniList.substring(0, 3990) + "\n..." : dniList)
         .setFooter({ text: `Total: ${allDnis.length} DNIs` }).setTimestamp();
