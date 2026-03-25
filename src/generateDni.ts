@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// generateDni.ts — ACTUALIZADO con manejo robusto de avatares
+// generateDni.ts — Avatar siempre fresco desde Roblox API
 // ═══════════════════════════════════════════════════════════════════════════
 import { createCanvas, loadImage, GlobalFonts } from "@napi-rs/canvas";
 import path from "path";
@@ -21,29 +21,46 @@ const POS = {
 };
 
 /**
- * Intenta obtener una URL de avatar fresca desde la API de Roblox.
- * Si falla, retorna la URL original.
+ * Obtiene una URL de avatar FRESCA desde la API de Roblox usando el username.
+ * Esto evita el problema de URLs expiradas guardadas en la base de datos.
  */
-async function refreshAvatarUrl(originalUrl: string): Promise<string> {
+export async function getFreshAvatarUrl(robloxUsername: string): Promise<string> {
   try {
-    // Extraer el userId de la URL original si es posible
-    // Las URLs de Roblox no contienen el userId directamente, retornamos la original
-    return originalUrl;
-  } catch {
-    return originalUrl;
+    // Paso 1: obtener el userId desde el username
+    const userRes = await fetch("https://users.roblox.com/v1/usernames/users", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ usernames: [robloxUsername], excludeBannedUsers: false }),
+    });
+    if (!userRes.ok) return "";
+    const userData = await userRes.json() as any;
+    if (!userData.data || userData.data.length === 0) return "";
+    const userId = userData.data[0].id as number;
+
+    // Paso 2: obtener la URL del avatar bust (busto, como en los DNIs)
+    const thumbRes = await fetch(
+      `https://thumbnails.roblox.com/v1/users/avatar-bust?userIds=${userId}&size=420x420&format=Png&isCircular=false`
+    );
+    if (!thumbRes.ok) return "";
+    const thumbData = await thumbRes.json() as any;
+    const freshUrl  = thumbData.data?.[0]?.imageUrl ?? "";
+    return freshUrl;
+  } catch (e) {
+    console.error(`Error obteniendo avatar fresco para ${robloxUsername}:`, e);
+    return "";
   }
 }
 
 /**
- * Descarga el avatar y lo retorna como imagen canvas.
- * Elimina el fondo blanco/gris claro típico de Roblox.
+ * Descarga el avatar desde una URL y lo retorna como canvas procesado.
+ * Elimina el fondo blanco/gris típico de Roblox.
  */
 async function fetchAndProcessAvatar(avatarUrl: string) {
   if (!avatarUrl || !avatarUrl.startsWith("http")) return null;
 
   try {
     const controller = new AbortController();
-    const timeout    = setTimeout(() => controller.abort(), 10_000);
+    const timeout    = setTimeout(() => controller.abort(), 15_000);
 
     const res = await fetch(avatarUrl, {
       headers: { "User-Agent": "Mozilla/5.0" },
@@ -52,11 +69,10 @@ async function fetchAndProcessAvatar(avatarUrl: string) {
     clearTimeout(timeout);
 
     if (!res.ok) {
-      console.error(`Avatar HTTP ${res.status} para URL: ${avatarUrl}`);
+      console.error(`Avatar HTTP ${res.status}`);
       return null;
     }
 
-    // Verificar tipo de contenido
     const contentType = res.headers.get("content-type") ?? "";
     const validTypes  = ["image/png", "image/jpeg", "image/jpg", "image/webp"];
     if (!validTypes.some((t) => contentType.includes(t))) {
@@ -84,7 +100,7 @@ async function fetchAndProcessAvatar(avatarUrl: string) {
 
   } catch (e: any) {
     if (e?.name === "AbortError") {
-      console.error("Timeout al cargar avatar:", avatarUrl);
+      console.error("Timeout al cargar avatar");
     } else {
       console.error("Error al cargar avatar:", e?.message ?? e);
     }
@@ -94,16 +110,17 @@ async function fetchAndProcessAvatar(avatarUrl: string) {
 
 /**
  * Genera la imagen del DNI y retorna un Buffer PNG.
+ * Siempre obtiene el avatar fresco desde Roblox usando el username.
  */
 export async function generateDniImage(
-  apellido:     string,
-  nombre:       string,
-  nacionalidad: string,
-  sexo:         string,
-  fechaNac:     string,
-  fechaEmision: string,
-  documento:    number,
-  avatarUrl:    string,
+  apellido:       string,
+  nombre:         string,
+  nacionalidad:   string,
+  sexo:           string,
+  fechaNac:       string,
+  fechaEmision:   string,
+  documento:      number,
+  robloxUsername: string,   // <-- ahora usamos el username, no la URL guardada
 ): Promise<Buffer> {
 
   // Descargar fuente si no existe
@@ -120,30 +137,29 @@ export async function generateDniImage(
   const template = await loadImage(TEMPLATE_PATH);
   const canvas   = createCanvas(template.width, template.height);
   const ctx      = canvas.getContext("2d");
-
-  // Dibujar template base
   ctx.drawImage(template, 0, 0);
 
-  // Pegar avatar si hay URL
-  if (avatarUrl) {
-    const avatar = await fetchAndProcessAvatar(avatarUrl);
-    if (avatar) {
-      const { x, y, w, h } = POS.foto;
-      const MARGIN = 5;
-      const scale  = Math.min((w - MARGIN * 2) / avatar.width, (h - MARGIN * 2) / avatar.height);
-      const nw     = Math.floor(avatar.width  * scale);
-      const nh     = Math.floor(avatar.height * scale);
-      const ox     = x + Math.floor((w - nw) / 2);
-      const oy     = y + Math.floor((h - nh) / 2);
-      ctx.drawImage(avatar, ox, oy, nw, nh);
+  // Obtener avatar FRESCO desde Roblox
+  if (robloxUsername) {
+    const freshUrl = await getFreshAvatarUrl(robloxUsername);
+    if (freshUrl) {
+      const avatar = await fetchAndProcessAvatar(freshUrl);
+      if (avatar) {
+        const { x, y, w, h } = POS.foto;
+        const MARGIN = 5;
+        const scale  = Math.min((w - MARGIN * 2) / avatar.width, (h - MARGIN * 2) / avatar.height);
+        const nw     = Math.floor(avatar.width  * scale);
+        const nh     = Math.floor(avatar.height * scale);
+        const ox     = x + Math.floor((w - nw) / 2);
+        const oy     = y + Math.floor((h - nh) / 2);
+        ctx.drawImage(avatar, ox, oy, nw, nh);
+      }
     }
-    // Si no carga el avatar, el DNI se genera igual sin foto (no tira error)
   }
 
-  // Configurar fuente y color de texto
+  // Texto
   ctx.fillStyle = "#000000";
 
-  // Textos normales (24px bold)
   ctx.font = "bold 24px DNIFont, Arial, sans-serif";
   ctx.fillText(apellido,     POS.apellido.x,         POS.apellido.y);
   ctx.fillText(nombre,       POS.nombre.x,           POS.nombre.y);
@@ -152,7 +168,6 @@ export async function generateDniImage(
   ctx.fillText(fechaNac,     POS.fecha_nacimiento.x,  POS.fecha_nacimiento.y);
   ctx.fillText(fechaEmision, POS.fecha_emision.x,     POS.fecha_emision.y);
 
-  // Documento (28px bold)
   ctx.font = "bold 28px DNIFont, Arial, sans-serif";
   ctx.fillText(String(documento), POS.documento.x, POS.documento.y);
 
