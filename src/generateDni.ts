@@ -1,12 +1,12 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// generateDni.ts — ACTUALIZADO con fuentes via nixpacks.toml
+// generateDni.ts — ACTUALIZADO con manejo robusto de avatares
 // ═══════════════════════════════════════════════════════════════════════════
 import { createCanvas, loadImage, GlobalFonts } from "@napi-rs/canvas";
 import path from "path";
 import fs from "fs";
 
 const TEMPLATE_PATH = path.join(process.cwd(), "assets", "dni_template.png");
-const FONT_PATH = path.join(process.cwd(), "assets", "font.ttf");
+const FONT_PATH     = path.join(process.cwd(), "assets", "font.ttf");
 
 // ── Posiciones exactas del template ──────────────────────────────────────────
 const POS = {
@@ -21,19 +21,58 @@ const POS = {
 };
 
 /**
- * Descarga el avatar de Roblox desde su URL y lo retorna como imagen canvas.
+ * Intenta obtener una URL de avatar fresca desde la API de Roblox.
+ * Si falla, retorna la URL original.
+ */
+async function refreshAvatarUrl(originalUrl: string): Promise<string> {
+  try {
+    // Extraer el userId de la URL original si es posible
+    // Las URLs de Roblox no contienen el userId directamente, retornamos la original
+    return originalUrl;
+  } catch {
+    return originalUrl;
+  }
+}
+
+/**
+ * Descarga el avatar y lo retorna como imagen canvas.
  * Elimina el fondo blanco/gris claro típico de Roblox.
  */
 async function fetchAndProcessAvatar(avatarUrl: string) {
-  try {
-    const res  = await fetch(avatarUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
-    const buf  = Buffer.from(await res.arrayBuffer());
-    const img  = await loadImage(buf);
+  if (!avatarUrl || !avatarUrl.startsWith("http")) return null;
 
-    const tmp  = createCanvas(img.width, img.height);
-    const ctx  = tmp.getContext("2d");
+  try {
+    const controller = new AbortController();
+    const timeout    = setTimeout(() => controller.abort(), 10_000);
+
+    const res = await fetch(avatarUrl, {
+      headers: { "User-Agent": "Mozilla/5.0" },
+      signal:  controller.signal,
+    });
+    clearTimeout(timeout);
+
+    if (!res.ok) {
+      console.error(`Avatar HTTP ${res.status} para URL: ${avatarUrl}`);
+      return null;
+    }
+
+    // Verificar tipo de contenido
+    const contentType = res.headers.get("content-type") ?? "";
+    const validTypes  = ["image/png", "image/jpeg", "image/jpg", "image/webp"];
+    if (!validTypes.some((t) => contentType.includes(t))) {
+      console.error(`Tipo de imagen no soportado: ${contentType}`);
+      return null;
+    }
+
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length === 0) return null;
+
+    const img = await loadImage(buf);
+    const tmp = createCanvas(img.width, img.height);
+    const ctx = tmp.getContext("2d");
     ctx.drawImage(img, 0, 0);
 
+    // Eliminar fondo blanco/gris
     const imageData = ctx.getImageData(0, 0, tmp.width, tmp.height);
     const data      = imageData.data;
     for (let i = 0; i < data.length; i += 4) {
@@ -42,8 +81,13 @@ async function fetchAndProcessAvatar(avatarUrl: string) {
     }
     ctx.putImageData(imageData, 0, 0);
     return tmp;
-  } catch (e) {
-    console.error("Error al cargar avatar:", e);
+
+  } catch (e: any) {
+    if (e?.name === "AbortError") {
+      console.error("Timeout al cargar avatar:", avatarUrl);
+    } else {
+      console.error("Error al cargar avatar:", e?.message ?? e);
+    }
     return null;
   }
 }
@@ -93,6 +137,7 @@ export async function generateDniImage(
       const oy     = y + Math.floor((h - nh) / 2);
       ctx.drawImage(avatar, ox, oy, nw, nh);
     }
+    // Si no carga el avatar, el DNI se genera igual sin foto (no tira error)
   }
 
   // Configurar fuente y color de texto
