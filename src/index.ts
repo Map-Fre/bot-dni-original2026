@@ -7,11 +7,12 @@ import {
   EmbedBuilder, ActivityType, PermissionFlagsBits, ModalBuilder,
   TextInputBuilder, TextInputStyle, ActionRowBuilder, AttachmentBuilder,
   ButtonBuilder, ButtonStyle, StringSelectMenuBuilder,
+  MessageFlags,
 } from "discord.js";
 
-import * as db      from "./database";
-import { generateDniImage }    from "./generateDni";
-import { getRobloxData, searchRobloxUsers } from "./roblox";
+import * as db                               from "./database";
+import { generateDniImage }                  from "./generateDni";
+import { getRobloxData, searchRobloxUsers }  from "./roblox";
 
 // ── Keep-alive HTTP para Railway / UptimeRobot ────────────────────────────────
 const PORT = parseInt(process.env.PORT ?? "3000");
@@ -132,23 +133,24 @@ if (!DISCORD_TOKEN) {
 }
 
 // ── Ready ─────────────────────────────────────────────────────────────────────
-client.once("ready", async () => {
-  console.log(`✅ Bot conectado como ${client.user?.tag}`);
+// Usamos clientReady en lugar de ready (sin deprecated warning)
+client.once("clientReady", async (readyClient) => {
+  console.log(`✅ Bot conectado como ${readyClient.user.tag}`);
 
   const statuses = [
-    { name: "/ayuda-dni",  type: ActivityType.Playing  },
+    { name: "/ayuda-dni", type: ActivityType.Playing },
   ];
   let si = 0;
   const tick = () => {
     const s = statuses[si++ % statuses.length];
-    client.user?.setPresence({ activities: [{ name: s.name, type: s.type }], status: "online" });
+    readyClient.user.setPresence({ activities: [{ name: s.name, type: s.type }], status: "online" });
   };
   tick();
   setInterval(tick, 15_000);
 
   try {
     const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN!);
-    await rest.put(Routes.applicationCommands(client.user!.id), { body: commands });
+    await rest.put(Routes.applicationCommands(readyClient.user.id), { body: commands });
     console.log("✅ Slash commands registrados.");
   } catch (e) {
     console.error("Error registrando comandos:", e);
@@ -173,7 +175,7 @@ client.on("interactionCreate", async (interaction) => {
 
   // ── Modal Submit ─────────────────────────────────────────────────────────
   if (interaction.isModalSubmit() && interaction.customId.startsWith("dni_modal_")) {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const numeroPj = parseInt(interaction.customId.split("_")[2]);
     const pending  = pendingDnis.get(interaction.user.id);
     if (!pending) return interaction.editReply({ content: "<a:Reprobado:1399874121055076372> | La sesión expiró. Volvé a ejecutar el comando." });
@@ -199,8 +201,7 @@ client.on("interactionCreate", async (interaction) => {
         robloxUsername: pending.robloxName, avatarUrl: pending.avatarUrl,
       });
 
-      const imgBuffer  = await generateDniImage(apellido, nombre, nacionalidad, sexo, fechaNac, fechaEmision, documento, pending.avatarUrl);
-      const attachment = new AttachmentBuilder(imgBuffer, { name: "dni.png" });
+      const imgBuffer = await generateDniImage(apellido, nombre, nacionalidad, sexo, fechaNac, fechaEmision, documento, pending.avatarUrl);
 
       const logsChannel = await client.channels.fetch(CANAL_LOGS_DNI).catch(() => null);
       if (logsChannel?.isTextBased()) {
@@ -245,7 +246,6 @@ client.on("interactionCreate", async (interaction) => {
       try {
         const allDnis = db.getAllDnis();
         if (allDnis.length === 0) return interaction.editReply({ content: "No hay DNIs para eliminar.", components: [] });
-        // No eliminamos directamente, pedimos confirmación
         const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
           new ButtonBuilder().setCustomId("confirmar_eliminar_todos").setLabel("⚠️ Confirmar eliminación").setStyle(ButtonStyle.Danger),
           new ButtonBuilder().setCustomId("cancelar_eliminar_todos").setLabel("↩️ Cancelar").setStyle(ButtonStyle.Success),
@@ -312,20 +312,20 @@ client.on("interactionCreate", async (interaction) => {
       )
       .setFooter({ text: "© 2026 Argentina RP┊ER:LC | Dev: @vladimirfernan.", iconURL: interaction.user.displayAvatarURL() })
       .setTimestamp();
-    return interaction.reply({ embeds: [embed], ephemeral: true });
+    return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
   }
 
   // /crear-dni
   if (interaction.commandName === "crear-dni") {
-    if (interaction.channelId !== CANAL_CREAR_DNI) return interaction.reply({ content: `<:adv:1468761911821602947> | Este comando se usa en <#${CANAL_CREAR_DNI}>`, ephemeral: true });
+    if (interaction.channelId !== CANAL_CREAR_DNI) return interaction.reply({ content: `<:adv:1468761911821602947> | Este comando se usa en <#${CANAL_CREAR_DNI}>`, flags: MessageFlags.Ephemeral });
     const numeroPj       = interaction.options.getInteger("numero_pj", true);
     const robloxUsername = interaction.options.getString("usuario_roblox", true);
     const totalSlots     = db.countDnisByDiscordId(interaction.user.id);
-    if (totalSlots >= 2) return interaction.reply({ content: "<a:Reprobado:1399874121055076372> | Ya tenés 2 DNIs registrados. Contactá a un administrador si necesitás eliminar uno.", ephemeral: true });
+    if (totalSlots >= 2) return interaction.reply({ content: "<a:Reprobado:1399874121055076372> | Ya tenés 2 DNIs registrados. Contactá a un administrador si necesitás eliminar uno.", flags: MessageFlags.Ephemeral });
     const slotExistente = db.getDniByDiscordIdAndSlot(interaction.user.id, numeroPj);
-    if (slotExistente) return interaction.reply({ content: `<a:cargando:1456888296381874207> | Tu **Personaje ${numeroPj}** ya tiene un DNI. Usá \`/ver-dni\` para verlo.`, ephemeral: true });
+    if (slotExistente) return interaction.reply({ content: `<a:cargando:1456888296381874207> | Tu **Personaje ${numeroPj}** ya tiene un DNI. Usá \`/ver-dni\` para verlo.`, flags: MessageFlags.Ephemeral });
     const roblox = await getRobloxData(robloxUsername);
-    if (!roblox) return interaction.reply({ content: `<:equiz:1468761969518706708> | No se encontró el usuario de Roblox: **${robloxUsername}**.`, ephemeral: true });
+    if (!roblox) return interaction.reply({ content: `<:equiz:1468761969518706708> | No se encontró el usuario de Roblox: **${robloxUsername}**.`, flags: MessageFlags.Ephemeral });
     pendingDnis.set(interaction.user.id, { numeroPj, robloxName: roblox.name, avatarUrl: roblox.avatarUrl });
     setTimeout(() => pendingDnis.delete(interaction.user.id), 10 * 60 * 1000);
     const modal = new ModalBuilder().setCustomId(`dni_modal_${numeroPj}`).setTitle(`DNI — Personaje ${numeroPj}`);
@@ -343,14 +343,14 @@ client.on("interactionCreate", async (interaction) => {
   if (interaction.commandName === "crear-3pj") {
     const member = interaction.member;
     if (!member || !("roles" in member) || !(member.roles as any).cache.has(ROL_TERCER_PJ)) {
-      return interaction.reply({ content: "<:equiz:1468761969518706708> | No tenés acceso a crear un 3er personaje.", ephemeral: true });
+      return interaction.reply({ content: "<:equiz:1468761969518706708> | No tenés acceso a crear un 3er personaje.", flags: MessageFlags.Ephemeral });
     }
     const robloxUsername = interaction.options.getString("usuario_roblox", true);
     const numeroPj       = 3;
     const slotExistente  = db.getDniByDiscordIdAndSlot(interaction.user.id, numeroPj);
-    if (slotExistente) return interaction.reply({ content: "<a:fijado:1468193352439824384> | Tu **Personaje 3** ya tiene un DNI. Usá `/ver-dni` para verlo.", ephemeral: true });
+    if (slotExistente) return interaction.reply({ content: "<a:fijado:1468193352439824384> | Tu **Personaje 3** ya tiene un DNI. Usá `/ver-dni` para verlo.", flags: MessageFlags.Ephemeral });
     const roblox = await getRobloxData(robloxUsername);
-    if (!roblox) return interaction.reply({ content: `<a:Nerd:1357113815623536791> | No se encontró el usuario de Roblox: **${robloxUsername}**.`, ephemeral: true });
+    if (!roblox) return interaction.reply({ content: `<a:Nerd:1357113815623536791> | No se encontró el usuario de Roblox: **${robloxUsername}**.`, flags: MessageFlags.Ephemeral });
     pendingDnis.set(interaction.user.id, { numeroPj, robloxName: roblox.name, avatarUrl: roblox.avatarUrl });
     setTimeout(() => pendingDnis.delete(interaction.user.id), 10 * 60 * 1000);
     const modal = new ModalBuilder().setCustomId(`dni_modal_3`).setTitle(`DNI — Personaje 3`);
@@ -366,8 +366,8 @@ client.on("interactionCreate", async (interaction) => {
 
   // /ver-dni
   if (interaction.commandName === "ver-dni") {
-    if (interaction.channelId !== CANAL_VER_DNI) return interaction.reply({ content: `<a:Nerd:1357113815623536791> | Este comando se usa en <#${CANAL_VER_DNI}>`, ephemeral: true });
-    await interaction.deferReply({ ephemeral: true });
+    if (interaction.channelId !== CANAL_VER_DNI) return interaction.reply({ content: `<a:Nerd:1357113815623536791> | Este comando se usa en <#${CANAL_VER_DNI}>`, flags: MessageFlags.Ephemeral });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const numeroPj = interaction.options.getInteger("personaje", true);
     try {
       const dni = db.getDniByDiscordIdAndSlot(interaction.user.id, numeroPj);
@@ -390,7 +390,7 @@ client.on("interactionCreate", async (interaction) => {
 
   // /comprobar-dni
   if (interaction.commandName === "comprobar-dni") {
-    if (interaction.channelId !== CANAL_COMPROBAR) return interaction.reply({ content: `<a:Nerd:1357113815623536791> | Este comando se usa en <#${CANAL_COMPROBAR}>`, ephemeral: true });
+    if (interaction.channelId !== CANAL_COMPROBAR) return interaction.reply({ content: `<a:Nerd:1357113815623536791> | Este comando se usa en <#${CANAL_COMPROBAR}>`, flags: MessageFlags.Ephemeral });
     await interaction.deferReply();
     const numeroPj   = interaction.options.getInteger("personaje", true);
     const targetUser = interaction.options.getUser("usuario", true);
@@ -415,7 +415,7 @@ client.on("interactionCreate", async (interaction) => {
 
   // /eliminar-pj
   if (interaction.commandName === "eliminar-pj") {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const member = interaction.member;
     if (!member || !("permissions" in member) || !(member.permissions as any).has(PermissionFlagsBits.Administrator)) {
       return interaction.editReply({ content: "<a:Nerd:1357113815623536791> | No tenés permisos de Administrador." });
@@ -453,8 +453,15 @@ client.on("interactionCreate", async (interaction) => {
           { name: "<:Ehh:1457908929504870475> | Motivo",                value: motivo,                                   inline: false },
           { name: "<:Moderadores:1473981745689923728> | Ejecutado por", value: `${interaction.user}`,                    inline: true  },
         ).setFooter({ text: "Argentina Roleplay — Sistema de DNI", iconURL: interaction.user.displayAvatarURL() }).setTimestamp()] });
-      try { await targetUser.send({ embeds: [new EmbedBuilder().setColor(0xff6600).setTitle("Tu personaje fue eliminado").setDescription(`Un administrador eliminó tu **Personaje ${numeroPj}** en **Argentina Roleplay**.`).addFields({ name: "Personaje", value: `${dni.nombre} ${dni.apellido}`, inline: true }, { name: "Motivo", value: motivo, inline: false }).setFooter({ text: "Si creés que es un error, contactá al staff." }).setTimestamp()] }); }
-      catch { console.log(`No se pudo enviar DM a ${targetUser.username}.`); }
+      try {
+        await targetUser.send({ embeds: [new EmbedBuilder().setColor(0xff6600)
+          .setTitle("Tu personaje fue eliminado")
+          .setDescription(`Un administrador eliminó tu **Personaje ${numeroPj}** en **Argentina Roleplay**.`)
+          .addFields(
+            { name: "Personaje", value: `${dni.nombre} ${dni.apellido}`, inline: true },
+            { name: "Motivo",    value: motivo,                          inline: false },
+          ).setFooter({ text: "Si creés que es un error, contactá al staff." }).setTimestamp()] });
+      } catch { console.log(`No se pudo enviar DM a ${targetUser.username}.`); }
     } catch (error: any) {
       return interaction.editReply({ content: `Error: \`${error?.message ?? String(error)}\`` });
     }
@@ -464,9 +471,9 @@ client.on("interactionCreate", async (interaction) => {
   if (interaction.commandName === "todos-los-dni") {
     const member = interaction.member;
     if (!member || !("roles" in member) || !(member.roles as any).cache.has(ROL_MODERADOR)) {
-      return interaction.reply({ content: "<a:Nerd:1357113815623536791> | No tenés los permisos necesarios.", ephemeral: true });
+      return interaction.reply({ content: "<a:Nerd:1357113815623536791> | No tenés los permisos necesarios.", flags: MessageFlags.Ephemeral });
     }
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     try {
       const allDnis = db.getAllDnis();
       if (allDnis.length === 0) return interaction.editReply({ content: "No hay DNIs registrados en el sistema." });
